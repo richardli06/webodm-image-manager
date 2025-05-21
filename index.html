@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'"
+    />
+    <meta
+      http-equiv="X-Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'"
+    />
+    <title>WebODM Interface</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <button id="select-folder">Select JPG Folder</button>
+    <div id="projects"></div>
+    <div id="tasks" style="display:none"></div>
+    <script src="renderer.js"></script>
+  </body>
+</html>
