@@ -1,10 +1,45 @@
 const { app, BrowserWindow } = require('electron/main')
-const { dialog, ipcMain, shell } = require('electron'); // Add at the top
+const { dialog, ipcMain, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 const axios = require('axios');
 require('dotenv').config();
+
+let cachedToken = null;
+let tokenExpiry = null;
+
+async function getApiToken() {
+  const username = process.env.WEBODM_USERNAME;
+  const password = process.env.WEBODM_PASSWORD;
+
+  if (cachedToken && tokenExpiry && Date.now() < tokenExpiry) {
+    return cachedToken;
+  }
+
+  const tokenRes = await axios.post('http://localhost:8000/api/token-auth/', {
+    username,
+    password
+  });
+  cachedToken = tokenRes.data.token;
+
+  const payload = JSON.parse(Buffer.from(cachedToken.split('.')[1], 'base64').toString());
+  tokenExpiry = payload.exp * 1000;
+
+  return cachedToken;
+}
+
+function startWebODMWithCompose() {
+  const webodmDir = 'C:\\Users\\WH01\\webodm';
+
+  exec('docker-compose up -d', { cwd: webodmDir }, (err, stdout, stderr) => {
+    if (err) {
+      console.error('Failed to start WebODM with docker-compose:', err.message, stderr);
+    } else {
+      console.log('WebODM started with docker-compose:', stdout);
+    }
+  });
+}
 
 const createWindow = () => {
   const win = new BrowserWindow({
@@ -20,22 +55,7 @@ const createWindow = () => {
   win.loadFile('index.html')
 }
 
-app.whenReady().then(() => {
-  createWindow()
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
-    }
-  })
-})
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit()
-  }
-})
-
+// --- IPC handlers ---
 ipcMain.handle('select-folder', async () => {
   console.log('select-folder called');
   const { canceled, filePaths } = await dialog.showOpenDialog({
@@ -57,12 +77,10 @@ ipcMain.handle('select-folder', async () => {
     return;
   }
 
-  // Wait for WebODM to be ready (use a public endpoint or just try to get the token)
   console.log('Waiting for WebODM to be ready...');
   const waitForWebODM = async (retries = 20, delay = 3000) => {
     for (let i = 0; i < retries; i++) {
       try {
-        // Try a public endpoint, or just check if the server is up
         await axios.get('http://localhost:8000/api/');
         return true;
       } catch (e) {
@@ -78,25 +96,15 @@ ipcMain.handle('select-folder', async () => {
     return;
   }
 
-  // Read credentials from .env
-  const username = process.env.WEBODM_USERNAME;
-  const password = process.env.WEBODM_PASSWORD;
-
-  // Get API token using the credentials from .env
   let apiToken;
   try {
-    const tokenRes = await axios.post('http://localhost:8000/api/token-auth/', {
-      username,
-      password
-    });
-    apiToken = tokenRes.data.token;
+    apiToken = await getApiToken();
     console.log('Got API token:', apiToken);
   } catch (e) {
     console.error('Failed to get API token:', e.message, e.response && e.response.data);
     return;
   }
 
-  // 1. Create a project
   let projectId;
   try {
     const projectRes = await axios.post(
@@ -111,7 +119,6 @@ ipcMain.handle('select-folder', async () => {
     return;
   }
 
-  // 2. Create a task and upload images in one step
   let taskId;
   try {
     const FormData = require('form-data');
@@ -144,23 +151,14 @@ ipcMain.handle('select-folder', async () => {
 });
 
 ipcMain.handle('get-projects', async () => {
-  const username = process.env.WEBODM_USERNAME;
-  const password = process.env.WEBODM_PASSWORD;
-
-  // Get API token
   let apiToken;
   try {
-    const tokenRes = await axios.post('http://localhost:8000/api/token-auth/', {
-      username,
-      password
-    });
-    apiToken = tokenRes.data.token;
+    apiToken = await getApiToken();
   } catch (e) {
     console.error('Failed to get API token:', e.message, e.response && e.response.data);
     return [];
   }
 
-  // Fetch projects
   try {
     const projectsRes = await axios.get('http://localhost:8000/api/projects/', {
       headers: { Authorization: `JWT ${apiToken}` }
@@ -172,18 +170,10 @@ ipcMain.handle('get-projects', async () => {
   }
 });
 
-// Add a handler to fetch tasks for a project
 ipcMain.handle('get-tasks', async (event, projectId) => {
-  const username = process.env.WEBODM_USERNAME;
-  const password = process.env.WEBODM_PASSWORD;
-
   let apiToken;
   try {
-    const tokenRes = await axios.post('http://localhost:8000/api/token-auth/', {
-      username,
-      password
-    });
-    apiToken = tokenRes.data.token;
+    apiToken = await getApiToken();
   } catch (e) {
     console.error('Failed to get API token:', e.message, e.response && e.response.data);
     return [];
@@ -197,5 +187,65 @@ ipcMain.handle('get-tasks', async (event, projectId) => {
   } catch (e) {
     console.error('Failed to fetch tasks:', e.message, e.response && e.response.data);
     return [];
+  }
+});
+
+ipcMain.handle('delete-project', async (event, projectId) => {
+  let apiToken;
+  try {
+    apiToken = await getApiToken();
+  } catch (e) {
+    console.error('Failed to get API token:', e.message, e.response && e.response.data);
+    return { success: false, error: 'Auth failed' };
+  }
+
+  try {
+    await axios.delete(`http://localhost:8000/api/projects/${projectId}/`, {
+      headers: { Authorization: `JWT ${apiToken}` }
+    });
+    return { success: true };
+  } catch (e) {
+    console.error('Failed to delete project:', e.message, e.response && e.response.data);
+    return { success: false, error: e.message };
+  }
+});
+
+ipcMain.handle('rename-project', async (event, { projectId, newName }) => {
+  let apiToken;
+  try {
+    apiToken = await getApiToken();
+  } catch (e) {
+    console.error('Failed to get API token:', e.message, e.response && e.response.data);
+    return { success: false, error: 'Auth failed' };
+  }
+
+  try {
+    await axios.patch(
+      `http://localhost:8000/api/projects/${projectId}/`,
+      { name: newName },
+      { headers: { Authorization: `JWT ${apiToken}` } }
+    );
+    return { success: true };
+  } catch (e) {
+    console.error('Failed to rename project:', e.message, e.response && e.response.data);
+    return { success: false, error: e.message };
+  }
+});
+
+// --- App lifecycle ---
+app.whenReady().then(() => {
+  startWebODMWithCompose();
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit();
   }
 });
