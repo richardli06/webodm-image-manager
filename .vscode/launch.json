@@ -27,6 +27,16 @@
       "args": [".", "--remote-debugging-port=9222"],
       "outputCapture": "std",
       "console": "integratedTerminal"
+    },
+    {
+      "name": "Electron Forge (npm start)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["start"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "outputCapture": "std"
     }
   ]
 }
