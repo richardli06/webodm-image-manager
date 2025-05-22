@@ -1,47 +1,14 @@
-const { app, BrowserWindow } = require('electron/main')
+const { app, BrowserWindow } = require('electron/main');
 const { dialog, ipcMain, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
 const axios = require('axios');
-require('dotenv').config();
+const { IMAGE_HANDLER_API_URL } = require('./lib/constant'); // <-- Use the constant from lib
 
-let cachedToken = null;
-let tokenExpiry = null;
-
-async function getApiToken() {
-  const username = process.env.WEBODM_USERNAME;
-  const password = process.env.WEBODM_PASSWORD;
-
-  if (cachedToken && tokenExpiry && Date.now() < tokenExpiry) {
-    return cachedToken;
-  }
-
-  const tokenRes = await axios.post('http://localhost:8000/api/token-auth/', {
-    username,
-    password
-  });
-  cachedToken = tokenRes.data.token;
-
-  const payload = JSON.parse(Buffer.from(cachedToken.split('.')[1], 'base64').toString());
-  tokenExpiry = payload.exp * 1000;
-
-  return cachedToken;
-}
-
-function startWebODMWithCompose() {
-  const webodmDir = 'C:\\Users\\WH01\\webodm';
-
-  exec('docker-compose up -d', { cwd: webodmDir }, (err, stdout, stderr) => {
-    if (err) {
-      console.error('Failed to start WebODM with docker-compose:', err.message, stderr);
-    } else {
-      console.log('WebODM started with docker-compose:', stdout);
-    }
-  });
-}
-
-const createWindow = () => {
+/**
+ * Creates the main application window.
+ */
+function createWindow() {
   const win = new BrowserWindow({
     width: 800,
     height: 600,
@@ -50,182 +17,119 @@ const createWindow = () => {
       contextIsolation: true,
       nodeIntegration: false
     }
-  })
+  });
 
-  win.loadFile('index.html')
+  win.loadFile('index.html');
 }
 
 // --- IPC handlers ---
+
+/**
+ * Handles folder selection, reads JPG images, and sends them to the image request handler.
+ * @returns {Promise<Object>} Result object with success/data or error/details.
+ */
 ipcMain.handle('select-folder', async () => {
-  console.log('select-folder called');
   const { canceled, filePaths } = await dialog.showOpenDialog({
     properties: ['openDirectory']
   });
   if (canceled) return;
 
   const folderPath = filePaths[0];
-  console.log('Selected folder:', folderPath);
-
   const jpgFiles = fs.readdirSync(folderPath)
     .filter(f => f.toLowerCase().endsWith('.jpg'))
     .map(f => path.join(folderPath, f));
 
-  console.log('Found JPG files:', jpgFiles);
-
   if (jpgFiles.length < 2) {
-    console.error('You need at least 2 JPG images to create a task in WebODM.');
-    return;
+    return { error: 'You need at least 2 JPG images to create a task.' };
   }
 
-  console.log('Waiting for WebODM to be ready...');
-  const waitForWebODM = async (retries = 20, delay = 3000) => {
-    for (let i = 0; i < retries; i++) {
-      try {
-        await axios.get('http://localhost:8000/api/');
-        return true;
-      } catch (e) {
-        console.error('WebODM not ready yet, retrying...', e.message, e.code, e.response && e.response.status);
-        await new Promise(res => setTimeout(res, delay));
-      }
-    }
-    return false;
-  };
-  const ready = await waitForWebODM();
-  if (!ready) {
-    console.error('WebODM did not become ready in time.');
-    return;
-  }
+  // Read images as base64
+  const imagesBase64 = jpgFiles.map(file =>
+    fs.readFileSync(file, { encoding: 'base64' })
+  );
 
-  let apiToken;
+  // Prompt for project name or use a default
+  const projectName = 'Electron Project';
+
   try {
-    apiToken = await getApiToken();
-    console.log('Got API token:', apiToken);
-  } catch (e) {
-    console.error('Failed to get API token:', e.message, e.response && e.response.data);
-    return;
-  }
-
-  let projectId;
-  try {
-    const projectRes = await axios.post(
-      'http://localhost:8000/api/projects/',
-      { name: 'Electron Project' },
-      { headers: { Authorization: `JWT ${apiToken}` } }
-    );
-    projectId = projectRes.data.id;
-    console.log('Created project with ID:', projectId);
-  } catch (e) {
-    console.error('Failed to create project:', e.message, e.response && e.response.data);
-    return;
-  }
-
-  let taskId;
-  try {
-    const FormData = require('form-data');
-    const form = new FormData();
-    form.append('name', 'Electron Task');
-    jpgFiles.forEach(file => {
-      form.append('images', fs.createReadStream(file));
-    });
-
-    const taskRes = await axios.post(
-      `http://localhost:8000/api/projects/${projectId}/tasks/`,
-      form,
+    const res = await axios.post(
+      `${IMAGE_HANDLER_API_URL}/api/push-images`,
       {
-        headers: {
-          ...form.getHeaders(),
-          Authorization: `JWT ${apiToken}`
-        },
-        maxContentLength: Infinity,
-        maxBodyLength: Infinity
+        images: imagesBase64,
+        project_name: projectName
       }
     );
-    taskId = taskRes.data.id;
-    console.log('Created task with ID:', taskId);
+    return { success: true, data: res.data };
   } catch (e) {
-    console.error('Failed to create task and upload images:', e.message, e.response && e.response.data);
-    return;
+    return { error: e.message, details: e.response && e.response.data };
   }
-
-  console.log('Images sent to WebODM for processing!');
 });
 
+/**
+ * Fetches all projects from the image request handler.
+ * @returns {Promise<Array>} Array of project objects or empty array on error.
+ */
 ipcMain.handle('get-projects', async () => {
-  let apiToken;
   try {
-    apiToken = await getApiToken();
-  } catch (e) {
-    console.error('Failed to get API token:', e.message, e.response && e.response.data);
-    return [];
-  }
-
-  try {
-    const projectsRes = await axios.get('http://localhost:8000/api/projects/', {
-      headers: { Authorization: `JWT ${apiToken}` }
-    });
-    return projectsRes.data;
+    const res = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-projects`);
+    return res.data.results || res.data; // .results if paginated, else array
   } catch (e) {
     console.error('Failed to fetch projects:', e.message, e.response && e.response.data);
     return [];
   }
 });
 
+/**
+ * Fetches all tasks for a given project from the image request handler.
+ * @param {Electron.IpcMainInvokeEvent} event - The IPC event.
+ * @param {string} projectId - The project ID.
+ * @returns {Promise<Array>} Array of task objects or empty array on error.
+ */
 ipcMain.handle('get-tasks', async (event, projectId) => {
-  let apiToken;
   try {
-    apiToken = await getApiToken();
-  } catch (e) {
-    console.error('Failed to get API token:', e.message, e.response && e.response.data);
-    return [];
-  }
-
-  try {
-    const tasksRes = await axios.get(`http://localhost:8000/api/projects/${projectId}/tasks/`, {
-      headers: { Authorization: `JWT ${apiToken}` }
+    const res = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-tasks`, {
+      params: { project_id: projectId }
     });
-    return tasksRes.data;
+    return res.data.results || res.data; // .results if paginated, else array
   } catch (e) {
     console.error('Failed to fetch tasks:', e.message, e.response && e.response.data);
     return [];
   }
 });
 
+/**
+ * Deletes a project via the image request handler.
+ * @param {Electron.IpcMainInvokeEvent} event - The IPC event.
+ * @param {string} projectId - The project ID.
+ * @returns {Promise<Object>} Result object with success/data or error.
+ */
 ipcMain.handle('delete-project', async (event, projectId) => {
-  let apiToken;
   try {
-    apiToken = await getApiToken();
-  } catch (e) {
-    console.error('Failed to get API token:', e.message, e.response && e.response.data);
-    return { success: false, error: 'Auth failed' };
-  }
-
-  try {
-    await axios.delete(`http://localhost:8000/api/projects/${projectId}/`, {
-      headers: { Authorization: `JWT ${apiToken}` }
+    const res = await axios.post(`${IMAGE_HANDLER_API_URL}/api/delete-project`, {
+      project_id: projectId
     });
-    return { success: true };
+    return { success: true, data: res.data };
   } catch (e) {
     console.error('Failed to delete project:', e.message, e.response && e.response.data);
     return { success: false, error: e.message };
   }
 });
 
+/**
+ * Renames a project via the image request handler.
+ * @param {Electron.IpcMainInvokeEvent} event - The IPC event.
+ * @param {Object} args - Arguments object.
+ * @param {string} args.projectId - The project ID.
+ * @param {string} args.newName - The new project name.
+ * @returns {Promise<Object>} Result object with success/data or error.
+ */
 ipcMain.handle('rename-project', async (event, { projectId, newName }) => {
-  let apiToken;
   try {
-    apiToken = await getApiToken();
-  } catch (e) {
-    console.error('Failed to get API token:', e.message, e.response && e.response.data);
-    return { success: false, error: 'Auth failed' };
-  }
-
-  try {
-    await axios.patch(
-      `http://localhost:8000/api/projects/${projectId}/`,
-      { name: newName },
-      { headers: { Authorization: `JWT ${apiToken}` } }
-    );
-    return { success: true };
+    const res = await axios.post(`${IMAGE_HANDLER_API_URL}/api/rename-project`, {
+      project_id: projectId,
+      new_name: newName
+    });
+    return { success: true, data: res.data };
   } catch (e) {
     console.error('Failed to rename project:', e.message, e.response && e.response.data);
     return { success: false, error: e.message };
@@ -233,19 +137,17 @@ ipcMain.handle('rename-project', async (event, { projectId, newName }) => {
 });
 
 // --- App lifecycle ---
-app.whenReady().then(() => {
-  startWebODMWithCompose();
-  createWindow();
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
-  });
+/**
+ * Initializes the Electron app and creates the main window.
+ */
+app.whenReady().then(() => {
+  createWindow();
 });
 
+/**
+ * Quits the app when all windows are closed (except on macOS).
+ */
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  if (process.platform !== 'darwin') app.quit();
 });
