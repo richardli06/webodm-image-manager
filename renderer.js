@@ -163,111 +163,138 @@ async function showTasks(projectId, projectName) {
   }
 }
 
-function showPrompt(title, placeholder, defaultValue = '') {
+function showRenamePrompt(defaultValue) {
   return new Promise((resolve) => {
     const overlay = document.getElementById('modal-overlay');
     const input = document.getElementById('modal-input');
     const ok = document.getElementById('modal-ok');
     const cancel = document.getElementById('modal-cancel');
-    const modalTitle = document.getElementById('modal-title');
     
-    if (!overlay || !input || !ok || !cancel || !modalTitle) {
+    if (!overlay || !input || !ok || !cancel) {
       console.error('Modal elements not found!');
       resolve(null);
       return;
     }
     
-    // Set modal content
-    modalTitle.textContent = title;
-    input.placeholder = placeholder;
-    input.value = defaultValue;
+    input.value = defaultValue || '';
     overlay.style.display = 'block';
     input.focus();
-    input.select(); // Select existing text if any
 
     function cleanup() {
       overlay.style.display = 'none';
       ok.onclick = null;
       cancel.onclick = null;
-      input.onkeydown = null;
     }
 
     ok.onclick = () => {
-      const value = input.value.trim();
-      if (!value) {
-        alert('Please enter a valid name!');
-        input.focus();
-        return;
-      }
       cleanup();
-      resolve(value);
+      resolve(input.value.trim());
     };
-    
     cancel.onclick = () => {
       cleanup();
       resolve(null);
     };
-    
     input.onkeydown = (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        ok.onclick();
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        cancel.onclick();
-      }
+      if (e.key === 'Enter') ok.onclick();
+      if (e.key === 'Escape') cancel.onclick();
     };
   });
 }
 
-function showRenamePrompt(defaultValue) {
-  return showPrompt('Rename Project', 'Enter new project name', defaultValue);
+// Handle folder selection
+if (selectFolderBtn) {
+  selectFolderBtn.addEventListener('click', async () => {
+    if (!selectedProjectName) {
+      alert('Please select a project first!');
+      return;
+    }
+    
+    console.log('Select folder button clicked, project:', selectedProjectName);
+    selectFolderBtn.disabled = true;
+    if (progressContainer) progressContainer.style.display = 'block';
+    if (uploadResult) uploadResult.innerHTML = '';
+
+    try {
+      // Pass the selected project name to the main process
+      const result = await window.electronAPI.selectFolder(selectedProjectName);
+      
+      if (result.success) {
+        if (uploadResult) uploadResult.innerHTML = `<div class="success">✅ ${result.summary || 'Upload completed!'}</div>`;
+        // Refresh both project lists after successful upload
+        await populateProjectSelector();
+        await showProjects();
+      } else {
+        if (uploadResult) uploadResult.innerHTML = `<div class="error">❌ Error: ${result.error}</div>`;
+      }
+    } catch (error) {
+      console.error('Error selecting folder:', error);
+      if (uploadResult) uploadResult.innerHTML = `<div class="error">❌ Error: ${error.message}</div>`;
+    } finally {
+      setTimeout(() => {
+        selectFolderBtn.disabled = !selectedProjectName; // Re-enable if project is selected
+        if (progressContainer) {
+          setTimeout(() => progressContainer.style.display = 'none', 3000);
+        }
+      }, 1000);
+    }
+  });
 }
 
-function showCreateProjectPrompt() {
-  return showPrompt('Create Project', 'Enter project name');
-}
-
-function updateProgress(data) {
-  console.log('Progress update:', data);
+// Keep only this progress handler (file-based progress)
+window.electronAPI.onUploadProgress((data) => {
+  const progressContainer = document.getElementById('progressContainer');
   const progressFill = document.getElementById('progressFill');
   const progressText = document.getElementById('progressText');
   const progressMessage = document.getElementById('progressMessage');
   
-  if (!progressFill || !progressText || !progressMessage) return;
-  
-  const { stage, totalFiles, currentBatch, totalBatches, filesUploaded, message } = data;
-  
-  // Calculate progress percentage
-  let progressPercent = 0;
-  if (totalBatches > 0) {
-    progressPercent = Math.round((currentBatch / totalBatches) * 100);
-  }
+  if (progressContainer) progressContainer.style.display = 'block';
   
   // Update progress bar
-  progressFill.style.width = `${progressPercent}%`;
-  
-  // Update text
-  if (totalFiles && totalBatches) {
-    progressText.textContent = `Batch ${currentBatch || 0}/${totalBatches} - ${filesUploaded || 0}/${totalFiles} files uploaded (${progressPercent}%)`;
-  } else {
-    progressText.textContent = message || 'Processing...';
+  if (progressFill && data.progress !== undefined) {
+    progressFill.style.width = `${data.progress}%`;
   }
   
-  // Update message
-  progressMessage.textContent = message || '';
-  
-  // Change color based on stage
-  if (stage === 'error') {
-    progressFill.style.background = '#dc3545';
-  } else if (stage === 'completed') {
-    progressFill.style.background = 'linear-gradient(90deg, #28a745, #20c997)';
-    progressFill.style.width = '100%';
-  } else {
-    progressFill.style.background = 'linear-gradient(90deg, #007bff, #17a2b8)';
+  // Update text based on stage
+  if (progressText) {
+    if (data.stage === 'preparing') {
+      progressText.textContent = `Preparing files... ${data.filesProcessed || 0}/${data.totalFiles || 0} processed (${data.progress || 0}%)`;
+    } else if (data.stage === 'uploading') {
+      if (data.bytesUploaded && data.bytesTotal) {
+        const mbUploaded = (data.bytesUploaded / 1024 / 1024).toFixed(1);
+        const mbTotal = (data.bytesTotal / 1024 / 1024).toFixed(1);
+        progressText.textContent = `Uploading... ${mbUploaded}MB / ${mbTotal}MB (${data.progress || 0}%)`;
+      } else {
+        progressText.textContent = `Uploading ${data.totalFiles || 0} files (${data.progress || 0}%)`;
+      }
+    } else {
+      progressText.textContent = `${data.filesUploaded || 0}/${data.totalFiles || 0} files uploaded (${data.progress || 0}%)`;
+    }
   }
-}
+  
+  if (progressMessage) {
+    progressMessage.textContent = data.message || '';
+  }
+  
+  // Change progress bar color based on stage
+  if (progressFill) {
+    if (data.stage === 'error') {
+      progressFill.style.background = '#dc3545';
+    } else if (data.stage === 'completed') {
+      progressFill.style.background = 'linear-gradient(90deg, #28a745, #20c997)';
+    } else if (data.stage === 'preparing') {
+      progressFill.style.background = 'linear-gradient(90deg, #ffc107, #fd7e14)';
+    } else {
+      progressFill.style.background = 'linear-gradient(90deg, #007bff, #17a2b8)';
+    }
+  }
+  
+  // Hide progress on completion or error
+  if (data.stage === 'completed' || data.stage === 'error') {
+    setTimeout(() => {
+      if (progressContainer) progressContainer.style.display = 'none';
+    }, 3000);
+  }
+});
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
@@ -276,7 +303,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // Get UI elements
   const selectFolderBtn = document.getElementById('selectFolderBtn');
   const refreshProjectsBtn = document.getElementById('refreshProjectsBtn');
-  const createProjectBtn = document.getElementById('createProjectBtn'); // Add this line
   const refreshProjectSelect = document.getElementById('refreshProjectSelect');
   const uploadResult = document.getElementById('uploadResult');
   const progressContainer = document.getElementById('progressContainer');
@@ -291,91 +317,7 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshProjectSelect.addEventListener('click', refreshProjectSelector);
   }
 
-  // Handle create project button
-  if (createProjectBtn) {
-    createProjectBtn.addEventListener('click', async () => {
-      console.log('Create project button clicked');
-      
-      const projectName = await showCreateProjectPrompt();
-      if (!projectName) {
-        console.log('Project creation cancelled');
-        return;
-      }
-      
-      console.log('Creating project:', projectName);
-      createProjectBtn.disabled = true;
-      createProjectBtn.textContent = 'Creating...';
-      
-      try {
-        const result = await window.electronAPI.createProject(projectName);
-        
-        if (result.success) {
-          console.log('Project created successfully:', result.data);
-          alert(`Project "${projectName}" created successfully!`);
-          
-          // Refresh both project lists
-          await showProjects();
-          await populateProjectSelector();
-        } else {
-          console.error('Failed to create project:', result.error);
-          alert(`Failed to create project: ${result.error || 'Unknown error'}`);
-        }
-      } catch (error) {
-        console.error('Error creating project:', error);
-        alert(`Error creating project: ${error.message}`);
-      } finally {
-        createProjectBtn.disabled = false;
-        createProjectBtn.textContent = 'Create Project';
-      }
-    });
-  }
-
-  // Handle folder selection (existing code - keep as is)
-  if (selectFolderBtn) {
-    selectFolderBtn.addEventListener('click', async () => {
-      if (!selectedProjectName) {
-        alert('Please select a project first!');
-        return;
-      }
-      
-      console.log('Select folder button clicked, project:', selectedProjectName);
-      selectFolderBtn.disabled = true;
-      if (progressContainer) progressContainer.style.display = 'block';
-      if (uploadResult) uploadResult.innerHTML = '';
-
-      // Set up progress listener
-      if (window.electronAPI?.onUploadProgress) {
-        progressCleanup = window.electronAPI.onUploadProgress(updateProgress);
-      }
-
-      try {
-        // Pass the selected project name to the main process
-        const result = await window.electronAPI.selectFolder(selectedProjectName);
-        
-        if (result.success) {
-          if (uploadResult) uploadResult.innerHTML = `<div class="success">✅ ${result.summary || 'Upload completed!'}</div>`;
-          // Refresh both project lists after successful upload
-          await populateProjectSelector();
-          await showProjects();
-        } else {
-          if (uploadResult) uploadResult.innerHTML = `<div class="error">❌ Error: ${result.error}</div>`;
-        }
-      } catch (error) {
-        console.error('Error selecting folder:', error);
-        if (uploadResult) uploadResult.innerHTML = `<div class="error">❌ Error: ${error.message}</div>`;
-      } finally {
-        if (progressCleanup) progressCleanup();
-        setTimeout(() => {
-          selectFolderBtn.disabled = !selectedProjectName; // Re-enable if project is selected
-          if (progressContainer) {
-            setTimeout(() => progressContainer.style.display = 'none', 3000);
-          }
-        }, 1000);
-      }
-    });
-  }
-
-  // Handle refresh projects (existing code - keep as is)
+  // Handle refresh projects (update to also refresh selector)
   if (refreshProjectsBtn) {
     refreshProjectsBtn.addEventListener('click', async () => {
       console.log('Refresh projects clicked');

@@ -100,7 +100,7 @@ ipcMain.handle('select-folder', async (event, projectName) => {
     console.log(`Found ${files.length} images. Starting batch upload to project: ${projectName}`);
 
     // 2. Upload in batches
-    const batchSize = 15;
+    const batchSize = 1000; // Changed from 15 to 1000
     const maxFileSize = 50 * 1024 * 1024;
     const totalBatches = Math.ceil(files.length / batchSize);
     const results = [];
@@ -114,6 +114,7 @@ ipcMain.handle('select-folder', async (event, projectName) => {
       currentBatch: 0,
       totalBatches: totalBatches,
       filesUploaded: 0,
+      progress: 0,
       message: `Found ${files.length} images. Preparing upload to "${projectName}"...`
     });
 
@@ -123,23 +124,27 @@ ipcMain.handle('select-folder', async (event, projectName) => {
       
       // Send progress update
       event.sender.send('upload-progress', {
-        stage: 'uploading',
+        stage: 'preparing',
         totalFiles: files.length,
         currentBatch: batchNumber,
         totalBatches: totalBatches,
         filesUploaded: totalUploaded,
-        message: `Uploading batch ${batchNumber}/${totalBatches} to "${projectName}" (${batch.length} files)...`
+        progress: Math.round((totalUploaded / files.length) * 100),
+        message: `Preparing batch ${batchNumber}/${totalBatches} for "${projectName}" (${batch.length} files)...`
       });
 
       const form = new FormData();
-      form.append('project_name', projectName); // Use the selected project name
+      form.append('project_name', projectName);
       
       let batchFilesAdded = 0;
+      let filesProcessed = 0;
+      
       for (const filePath of batch) {
         const stats = fs.statSync(filePath);
         if (stats.size > maxFileSize) {
           console.warn(`Skipping large file: ${path.basename(filePath)} (${(stats.size / 1024 / 1024).toFixed(1)}MB)`);
           totalSkipped++;
+          filesProcessed++;
           continue;
         }
         
@@ -148,12 +153,39 @@ ipcMain.handle('select-folder', async (event, projectName) => {
           contentType: 'image/jpeg'
         });
         batchFilesAdded++;
+        filesProcessed++;
+        
+        // Send progress update every 25 files during preparation
+        if (filesProcessed % 25 === 0) {
+          const preparationProgress = Math.round(((i + filesProcessed) / files.length) * 50); // 50% for preparation
+          event.sender.send('upload-progress', {
+            stage: 'preparing',
+            totalFiles: files.length,
+            currentBatch: batchNumber,
+            totalBatches: totalBatches,
+            filesUploaded: totalUploaded,
+            filesProcessed: i + filesProcessed,
+            progress: preparationProgress,
+            message: `Preparing files for upload... ${filesProcessed}/${batch.length} files processed`
+          });
+        }
       }
 
       if (batchFilesAdded === 0) {
         console.log(`Batch ${batchNumber} skipped - no valid files`);
         continue;
       }
+
+      // Send upload starting progress
+      event.sender.send('upload-progress', {
+        stage: 'uploading',
+        totalFiles: files.length,
+        currentBatch: batchNumber,
+        totalBatches: totalBatches,
+        filesUploaded: totalUploaded,
+        progress: 50, // 50% when starting upload
+        message: `Uploading batch ${batchNumber}/${totalBatches} to "${projectName}" (${batchFilesAdded} files)...`
+      });
 
       try {
         console.log(`📤 Uploading batch ${batchNumber} to project "${projectName}": ${IMAGE_HANDLER_API_URL}/api/push-images`);
@@ -164,9 +196,26 @@ ipcMain.handle('select-folder', async (event, projectName) => {
           form,
           { 
             headers: form.getHeaders(),
-            timeout: 300000,
+            timeout: 600000, // Increased to 10 minutes for large batches
             maxContentLength: Infinity,
-            maxBodyLength: Infinity
+            maxBodyLength: Infinity,
+            onUploadProgress: (progressEvent) => {
+              // Calculate upload progress (50% to 100%)
+              const uploadPercent = progressEvent.loaded / progressEvent.total;
+              const totalProgress = 50 + (uploadPercent * 50); // 50% + upload progress
+              
+              event.sender.send('upload-progress', {
+                stage: 'uploading',
+                totalFiles: files.length,
+                currentBatch: batchNumber,
+                totalBatches: totalBatches,
+                filesUploaded: totalUploaded,
+                progress: Math.round(totalProgress),
+                bytesUploaded: progressEvent.loaded,
+                bytesTotal: progressEvent.total,
+                message: `Uploading to "${projectName}"... ${Math.round(uploadPercent * 100)}% of batch ${batchNumber}`
+              });
+            }
           }
         );
         
@@ -179,14 +228,15 @@ ipcMain.handle('select-folder', async (event, projectName) => {
         });
         totalUploaded += batchFilesAdded;
 
-        // Send success update
+        // Send success update with final progress
         event.sender.send('upload-progress', {
-          stage: 'uploading',
+          stage: 'completed',
           totalFiles: files.length,
           currentBatch: batchNumber,
           totalBatches: totalBatches,
           filesUploaded: totalUploaded,
-          message: `Batch ${batchNumber}/${totalBatches} completed - uploaded ${batchFilesAdded} files to "${projectName}"`
+          progress: 100,
+          message: `Batch ${batchNumber}/${totalBatches} completed - uploaded ${batchFilesAdded} files to "${projectName}" (${totalUploaded}/${files.length} total)`
         });
 
       } catch (batchError) {
@@ -205,14 +255,15 @@ ipcMain.handle('select-folder', async (event, projectName) => {
           details: batchError.response?.data
         });
 
-        // Send error update
+        // Send error update with current progress
         event.sender.send('upload-progress', {
           stage: 'error',
           totalFiles: files.length,
           currentBatch: batchNumber,
           totalBatches: totalBatches,
           filesUploaded: totalUploaded,
-          message: `Batch ${batchNumber} failed uploading to "${projectName}": ${batchError.response?.status || 'Connection error'}`
+          progress: Math.round((totalUploaded / files.length) * 100),
+          message: `Batch ${batchNumber} failed uploading to "${projectName}": ${batchError.response?.status || 'Connection error'} (${totalUploaded}/${files.length} uploaded)`
         });
       }
 
@@ -224,7 +275,8 @@ ipcMain.handle('select-folder', async (event, projectName) => {
           currentBatch: batchNumber,
           totalBatches: totalBatches,
           filesUploaded: totalUploaded,
-          message: 'Waiting before next batch...'
+          progress: Math.round((totalUploaded / files.length) * 100),
+          message: `Waiting before next batch... (${totalUploaded}/${files.length} files uploaded)`
         });
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
@@ -233,13 +285,14 @@ ipcMain.handle('select-folder', async (event, projectName) => {
     const successfulBatches = results.filter(r => r.success).length;
     const failedBatches = results.filter(r => !r.success).length;
 
-    // Send completion update
+    // Send completion update with final progress
     event.sender.send('upload-progress', {
       stage: 'completed',
       totalFiles: files.length,
       currentBatch: totalBatches,
       totalBatches: totalBatches,
       filesUploaded: totalUploaded,
+      progress: Math.round((totalUploaded / files.length) * 100),
       message: `Upload complete: ${totalUploaded}/${files.length} files uploaded to "${projectName}"`
     });
 
