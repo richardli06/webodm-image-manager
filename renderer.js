@@ -163,42 +163,70 @@ async function showTasks(projectId, projectName) {
   }
 }
 
-function showRenamePrompt(defaultValue) {
+function showPrompt(title, placeholder, defaultValue = '') {
   return new Promise((resolve) => {
     const overlay = document.getElementById('modal-overlay');
     const input = document.getElementById('modal-input');
     const ok = document.getElementById('modal-ok');
     const cancel = document.getElementById('modal-cancel');
+    const modalTitle = document.getElementById('modal-title');
     
-    if (!overlay || !input || !ok || !cancel) {
+    if (!overlay || !input || !ok || !cancel || !modalTitle) {
       console.error('Modal elements not found!');
       resolve(null);
       return;
     }
     
-    input.value = defaultValue || '';
+    // Set modal content
+    modalTitle.textContent = title;
+    input.placeholder = placeholder;
+    input.value = defaultValue;
     overlay.style.display = 'block';
     input.focus();
+    input.select(); // Select existing text if any
 
     function cleanup() {
       overlay.style.display = 'none';
       ok.onclick = null;
       cancel.onclick = null;
+      input.onkeydown = null;
     }
 
     ok.onclick = () => {
+      const value = input.value.trim();
+      if (!value) {
+        alert('Please enter a valid name!');
+        input.focus();
+        return;
+      }
       cleanup();
-      resolve(input.value.trim());
+      resolve(value);
     };
+    
     cancel.onclick = () => {
       cleanup();
       resolve(null);
     };
+    
     input.onkeydown = (e) => {
-      if (e.key === 'Enter') ok.onclick();
-      if (e.key === 'Escape') cancel.onclick();
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        ok.onclick();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        cancel.onclick();
+      }
     };
   });
+}
+
+function showRenamePrompt(defaultValue) {
+  return showPrompt('Rename Project', 'Enter new project name', defaultValue);
+}
+
+function showCreateProjectPrompt() {
+  return showPrompt('Create Project', 'Enter project name');
 }
 
 function updateProgress(data) {
@@ -248,6 +276,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Get UI elements
   const selectFolderBtn = document.getElementById('selectFolderBtn');
   const refreshProjectsBtn = document.getElementById('refreshProjectsBtn');
+  const createProjectBtn = document.getElementById('createProjectBtn'); // Add this line
   const refreshProjectSelect = document.getElementById('refreshProjectSelect');
   const uploadResult = document.getElementById('uploadResult');
   const progressContainer = document.getElementById('progressContainer');
@@ -262,7 +291,46 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshProjectSelect.addEventListener('click', refreshProjectSelector);
   }
 
-  // Handle folder selection (updated to use selected project)
+  // Handle create project button
+  if (createProjectBtn) {
+    createProjectBtn.addEventListener('click', async () => {
+      console.log('Create project button clicked');
+      
+      const projectName = await showCreateProjectPrompt();
+      if (!projectName) {
+        console.log('Project creation cancelled');
+        return;
+      }
+      
+      console.log('Creating project:', projectName);
+      createProjectBtn.disabled = true;
+      createProjectBtn.textContent = 'Creating...';
+      
+      try {
+        const result = await window.electronAPI.createProject(projectName);
+        
+        if (result.success) {
+          console.log('Project created successfully:', result.data);
+          alert(`Project "${projectName}" created successfully!`);
+          
+          // Refresh both project lists
+          await showProjects();
+          await populateProjectSelector();
+        } else {
+          console.error('Failed to create project:', result.error);
+          alert(`Failed to create project: ${result.error || 'Unknown error'}`);
+        }
+      } catch (error) {
+        console.error('Error creating project:', error);
+        alert(`Error creating project: ${error.message}`);
+      } finally {
+        createProjectBtn.disabled = false;
+        createProjectBtn.textContent = 'Create Project';
+      }
+    });
+  }
+
+  // Handle folder selection (existing code - keep as is)
   if (selectFolderBtn) {
     selectFolderBtn.addEventListener('click', async () => {
       if (!selectedProjectName) {
@@ -307,7 +375,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Handle refresh projects (update to also refresh selector)
+  // Handle refresh projects (existing code - keep as is)
   if (refreshProjectsBtn) {
     refreshProjectsBtn.addEventListener('click', async () => {
       console.log('Refresh projects clicked');

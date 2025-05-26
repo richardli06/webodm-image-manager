@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getTasks: (projectId) => ipcRenderer.invoke('get-tasks', projectId),
   deleteProject: (projectId) => ipcRenderer.invoke('delete-project', projectId),
   renameProject: (args) => ipcRenderer.invoke('rename-project', args),
+  createProject: (projectName) => ipcRenderer.invoke('create-project', projectName), // Add this line
   
   // Add progress listener
   onUploadProgress: (callback) => {

@@ -342,6 +342,30 @@ ipcMain.handle('rename-project', async (event, { projectId, newName }) => {
   }
 });
 
+/**
+ * Creates a new project via the image request handler.
+ * @param {Electron.IpcMainInvokeEvent} event - The IPC event.
+ * @param {string} projectName - The new project name.
+ * @returns {Promise<Object>} Result object with success/data or error.
+ */
+ipcMain.handle('create-project', async (event, projectName) => {
+  try {
+    console.log('Creating new project:', projectName);
+    const res = await axios.post(`${IMAGE_HANDLER_API_URL}/api/create-project`, {
+      name: projectName
+    });
+    console.log('Project created successfully:', res.data);
+    return { success: true, data: res.data };
+  } catch (e) {
+    console.error('Failed to create project:', e.message, e.response && e.response.data);
+    return { 
+      success: false, 
+      error: e.response?.data?.error || e.message,
+      details: e.response?.data
+    };
+  }
+});
+
 // --- App lifecycle ---
 
 /**
