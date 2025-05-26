@@ -5,5 +5,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getProjects: () => ipcRenderer.invoke('get-projects'),
   getTasks: (projectId) => ipcRenderer.invoke('get-tasks', projectId),
   deleteProject: (projectId) => ipcRenderer.invoke('delete-project', projectId),
-  renameProject: (projectId, newName) => ipcRenderer.invoke('rename-project', { projectId, newName })
+  renameProject: (args) => ipcRenderer.invoke('rename-project', args), // Pass the whole args object
+  
+  // Add progress listener
+  onUploadProgress: (callback) => {
+    ipcRenderer.on('upload-progress', (event, data) => callback(data));
+    // Return cleanup function
+    return () => ipcRenderer.removeAllListeners('upload-progress');
+  },
+
+  // Expose safe APIs here
+  sendMessage: (message) => ipcRenderer.invoke('send-message', message)
 });
