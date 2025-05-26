@@ -1,4 +1,58 @@
 let currentProjects = []; // Store projects globally
+let selectedProjectName = null;
+
+/**
+ * Populates the project dropdown with available projects
+ */
+async function populateProjectSelector() {
+  const projectSelect = document.getElementById('projectSelect');
+  const selectFolderBtn = document.getElementById('selectFolderBtn');
+  
+  if (!projectSelect) return;
+  
+  try {
+    // Show loading state
+    projectSelect.innerHTML = '<option value="">Loading projects...</option>';
+    projectSelect.disabled = true;
+    if (selectFolderBtn) selectFolderBtn.disabled = true;
+    
+    // Fetch projects
+    const projects = await window.electronAPI.getProjects();
+    
+    if (!projects || projects.length === 0) {
+      projectSelect.innerHTML = '<option value="">No projects available</option>';
+      return;
+    }
+    
+    // Populate dropdown
+    projectSelect.innerHTML = '<option value="">Select a project...</option>' +
+      projects.map(project => 
+        `<option value="${project.name}" data-id="${project.id}">${project.name} (ID: ${project.id})</option>`
+      ).join('');
+    
+    projectSelect.disabled = false;
+    
+    // Enable upload button when a project is selected
+    projectSelect.addEventListener('change', (e) => {
+      selectedProjectName = e.target.value;
+      if (selectFolderBtn) {
+        selectFolderBtn.disabled = !selectedProjectName;
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error loading projects:', error);
+    projectSelect.innerHTML = '<option value="">Error loading projects</option>';
+  }
+}
+
+/**
+ * Refreshes the project selector
+ */
+async function refreshProjectSelector() {
+  console.log('Refreshing project selector...');
+  await populateProjectSelector();
+}
 
 async function showProjects() {
   console.log('showProjects called');
@@ -194,15 +248,29 @@ document.addEventListener('DOMContentLoaded', () => {
   // Get UI elements
   const selectFolderBtn = document.getElementById('selectFolderBtn');
   const refreshProjectsBtn = document.getElementById('refreshProjectsBtn');
+  const refreshProjectSelect = document.getElementById('refreshProjectSelect');
   const uploadResult = document.getElementById('uploadResult');
   const progressContainer = document.getElementById('progressContainer');
 
   let progressCleanup = null;
 
-  // Handle folder selection
+  // Initialize project selector
+  populateProjectSelector();
+
+  // Handle project selector refresh
+  if (refreshProjectSelect) {
+    refreshProjectSelect.addEventListener('click', refreshProjectSelector);
+  }
+
+  // Handle folder selection (updated to use selected project)
   if (selectFolderBtn) {
     selectFolderBtn.addEventListener('click', async () => {
-      console.log('Select folder button clicked');
+      if (!selectedProjectName) {
+        alert('Please select a project first!');
+        return;
+      }
+      
+      console.log('Select folder button clicked, project:', selectedProjectName);
       selectFolderBtn.disabled = true;
       if (progressContainer) progressContainer.style.display = 'block';
       if (uploadResult) uploadResult.innerHTML = '';
@@ -213,10 +281,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       try {
-        const result = await window.electronAPI.selectFolder();
+        // Pass the selected project name to the main process
+        const result = await window.electronAPI.selectFolder(selectedProjectName);
         
         if (result.success) {
           if (uploadResult) uploadResult.innerHTML = `<div class="success">✅ ${result.summary || 'Upload completed!'}</div>`;
+          // Refresh both project lists after successful upload
+          await populateProjectSelector();
+          await showProjects();
         } else {
           if (uploadResult) uploadResult.innerHTML = `<div class="error">❌ Error: ${result.error}</div>`;
         }
@@ -226,7 +298,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } finally {
         if (progressCleanup) progressCleanup();
         setTimeout(() => {
-          selectFolderBtn.disabled = false;
+          selectFolderBtn.disabled = !selectedProjectName; // Re-enable if project is selected
           if (progressContainer) {
             setTimeout(() => progressContainer.style.display = 'none', 3000);
           }
@@ -235,11 +307,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Handle refresh projects
+  // Handle refresh projects (update to also refresh selector)
   if (refreshProjectsBtn) {
-    refreshProjectsBtn.addEventListener('click', () => {
+    refreshProjectsBtn.addEventListener('click', async () => {
       console.log('Refresh projects clicked');
-      showProjects();
+      await showProjects();
+      await populateProjectSelector();
     });
   }
 

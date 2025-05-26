@@ -134,25 +134,78 @@
     .section {
       margin: 30px 0;
     }
+
+    .upload-section {
+      margin: 20px 0;
+      padding: 20px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+    }
+
+    .project-selector {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+
+    .project-selector label {
+      font-weight: bold;
+      min-width: 100px;
+    }
+
+    .project-selector select {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+    }
+
+    .project-selector button {
+      padding: 8px 12px;
+      background: #007bff;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .project-selector button:hover {
+      background: #0056b3;
+    }
+
+    #selectFolderBtn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>WebODM Image Manager</h1>
     
-    <div class="section">
+    <div class="section upload-section">
       <h2>Upload Images</h2>
-      <button id="selectFolderBtn">Select Folder & Upload Images</button>
       
-      <!-- Progress bar section -->
-      <div id="progressContainer" class="progress-container">
-        <div class="progress-text">
-          <span id="progressText">Preparing...</span>
-        </div>
+      <div class="project-selector">
+        <label for="projectSelect">Select Project:</label>
+        <select id="projectSelect" disabled>
+          <option value="">Loading projects...</option>
+        </select>
+        <button id="refreshProjectSelect" title="Refresh project list">🔄</button>
+      </div>
+      
+      <button id="selectFolderBtn" disabled>Select Folder & Upload Images</button>
+      
+      <!-- Progress container -->
+      <div id="progressContainer" style="display: none;">
         <div class="progress-bar">
           <div id="progressFill" class="progress-fill"></div>
         </div>
-        <div id="progressMessage" class="progress-message">Starting upload...</div>
+        <div id="progressText">Preparing...</div>
+        <div id="progressMessage"></div>
       </div>
       
       <div id="uploadResult"></div>

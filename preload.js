@@ -1,11 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  selectFolder: () => ipcRenderer.invoke('select-folder'),
+  selectFolder: (projectName) => ipcRenderer.invoke('select-folder', projectName), // Pass project name
   getProjects: () => ipcRenderer.invoke('get-projects'),
   getTasks: (projectId) => ipcRenderer.invoke('get-tasks', projectId),
   deleteProject: (projectId) => ipcRenderer.invoke('delete-project', projectId),
-  renameProject: (args) => ipcRenderer.invoke('rename-project', args), // Pass the whole args object
+  renameProject: (args) => ipcRenderer.invoke('rename-project', args),
   
   // Add progress listener
   onUploadProgress: (callback) => {

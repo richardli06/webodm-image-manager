@@ -75,11 +75,16 @@ function createWindow() {
  * Handles folder selection, reads JPG images, and sends them to the image request handler in batches.
  * @returns {Promise<Object>} Result object with success/data or error/details.
  */
-ipcMain.handle('select-folder', async (event) => {
+ipcMain.handle('select-folder', async (event, projectName) => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
     properties: ['openDirectory']
   });
   if (canceled || !filePaths || !filePaths[0]) return { success: false, error: 'No folder selected' };
+
+  // Validate project name
+  if (!projectName) {
+    return { success: false, error: 'No project selected' };
+  }
 
   const folderPath = filePaths[0];
   try {
@@ -92,12 +97,12 @@ ipcMain.handle('select-folder', async (event) => {
       return { success: false, error: 'No JPG images found in folder' };
     }
 
-    console.log(`Found ${files.length} images. Starting batch upload...`);
+    console.log(`Found ${files.length} images. Starting batch upload to project: ${projectName}`);
 
     // 2. Upload in batches
     const batchSize = 15;
     const maxFileSize = 50 * 1024 * 1024;
-    const totalBatches = Math.ceil(files.length / batchSize); // Define totalBatches here
+    const totalBatches = Math.ceil(files.length / batchSize);
     const results = [];
     let totalUploaded = 0;
     let totalSkipped = 0;
@@ -107,9 +112,9 @@ ipcMain.handle('select-folder', async (event) => {
       stage: 'starting',
       totalFiles: files.length,
       currentBatch: 0,
-      totalBatches: totalBatches, // Use the defined variable
+      totalBatches: totalBatches,
       filesUploaded: 0,
-      message: `Found ${files.length} images. Preparing upload...`
+      message: `Found ${files.length} images. Preparing upload to "${projectName}"...`
     });
 
     for (let i = 0; i < files.length; i += batchSize) {
@@ -121,13 +126,13 @@ ipcMain.handle('select-folder', async (event) => {
         stage: 'uploading',
         totalFiles: files.length,
         currentBatch: batchNumber,
-        totalBatches: totalBatches, // Use the defined variable
+        totalBatches: totalBatches,
         filesUploaded: totalUploaded,
-        message: `Uploading batch ${batchNumber}/${totalBatches} (${batch.length} files)...`
+        message: `Uploading batch ${batchNumber}/${totalBatches} to "${projectName}" (${batch.length} files)...`
       });
 
       const form = new FormData();
-      form.append('project_name', 'gefarm');
+      form.append('project_name', projectName); // Use the selected project name
       
       let batchFilesAdded = 0;
       for (const filePath of batch) {
@@ -151,7 +156,7 @@ ipcMain.handle('select-folder', async (event) => {
       }
 
       try {
-        console.log(`📤 Uploading batch ${batchNumber} to: ${IMAGE_HANDLER_API_URL}/api/push-images`);
+        console.log(`📤 Uploading batch ${batchNumber} to project "${projectName}": ${IMAGE_HANDLER_API_URL}/api/push-images`);
         console.log(`📊 Form contains ${batchFilesAdded} files`);
         
         const res = await axios.post(
@@ -165,7 +170,7 @@ ipcMain.handle('select-folder', async (event) => {
           }
         );
         
-        console.log(`✅ Batch ${batchNumber} uploaded successfully (${batchFilesAdded} files)`);
+        console.log(`✅ Batch ${batchNumber} uploaded successfully to "${projectName}" (${batchFilesAdded} files)`);
         results.push({
           batch: batchNumber,
           success: true,
@@ -181,23 +186,16 @@ ipcMain.handle('select-folder', async (event) => {
           currentBatch: batchNumber,
           totalBatches: totalBatches,
           filesUploaded: totalUploaded,
-          message: `Batch ${batchNumber}/${totalBatches} completed (${batchFilesAdded} files uploaded)`
+          message: `Batch ${batchNumber}/${totalBatches} completed - uploaded ${batchFilesAdded} files to "${projectName}"`
         });
 
       } catch (batchError) {
-        console.error(`❌ Batch ${batchNumber} failed:`);
+        console.error(`❌ Batch ${batchNumber} failed for project "${projectName}":`);
         console.error('📍 URL:', batchError.config?.url);
         console.error('🔢 Status:', batchError.response?.status);
         console.error('📝 Status Text:', batchError.response?.statusText);
         console.error('💬 Error Message:', batchError.message);
         console.error('📄 Response Data:', batchError.response?.data);
-        
-        // Check if it's a connection error
-        if (batchError.code === 'ECONNREFUSED') {
-          console.error('🚨 Connection refused - is your server running?');
-        } else if (batchError.response?.status === 404) {
-          console.error('🚨 Endpoint not found - check your server routes');
-        }
         
         results.push({
           batch: batchNumber,
@@ -214,7 +212,7 @@ ipcMain.handle('select-folder', async (event) => {
           currentBatch: batchNumber,
           totalBatches: totalBatches,
           filesUploaded: totalUploaded,
-          message: `Batch ${batchNumber} failed: ${batchError.response?.status || 'Connection error'}`
+          message: `Batch ${batchNumber} failed uploading to "${projectName}": ${batchError.response?.status || 'Connection error'}`
         });
       }
 
@@ -242,7 +240,7 @@ ipcMain.handle('select-folder', async (event) => {
       currentBatch: totalBatches,
       totalBatches: totalBatches,
       filesUploaded: totalUploaded,
-      message: `Upload complete: ${totalUploaded}/${files.length} files uploaded`
+      message: `Upload complete: ${totalUploaded}/${files.length} files uploaded to "${projectName}"`
     });
 
     return { 
@@ -253,16 +251,17 @@ ipcMain.handle('select-folder', async (event) => {
         totalSkipped,
         successfulBatches,
         failedBatches,
-        results
+        results,
+        projectName
       },
-      summary: `Uploaded ${totalUploaded}/${files.length} files in ${successfulBatches}/${totalBatches} batches`
+      summary: `Uploaded ${totalUploaded}/${files.length} files to "${projectName}" in ${successfulBatches}/${totalBatches} batches`
     };
 
   } catch (err) {
     console.error('Failed to process folder:', err.message);
     event.sender.send('upload-progress', {
       stage: 'error',
-      message: `Error: ${err.message}`
+      message: `Error uploading to "${projectName}": ${err.message}`
     });
     return {
       success: false,
