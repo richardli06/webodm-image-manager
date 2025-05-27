@@ -501,16 +501,28 @@ ipcMain.handle('commit-task-to-map', async (event, projectId, projectName) => {
     // Get the task ID for this project first
     event.sender.send('commit-progress', {
       stage: 'fetching',
-      progress: 5,
+      progress: 10,
       message: 'Getting task information from WebODM...'
     });
 
     // Get tasks for the project to find the task ID
-    const tasksResponse = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-tasks/${projectId}`, {
-      timeout: 30000
-    });
+    // Try the direct endpoint first, then fall back to get-tasks with params
+    let tasks;
+    try {
+      const tasksResponse = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-tasks/${projectId}`, {
+        timeout: 30000
+      });
+      tasks = tasksResponse.data;
+    } catch (directError) {
+      // If direct endpoint doesn't exist, try with query params
+      console.log('Direct endpoint failed, trying with query params...');
+      const tasksResponse = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-tasks`, {
+        params: { project_id: projectId },
+        timeout: 30000
+      });
+      tasks = tasksResponse.data;
+    }
 
-    const tasks = tasksResponse.data;
     if (!tasks || tasks.length === 0) {
       throw new Error('No tasks found for this project');
     }
@@ -519,111 +531,74 @@ ipcMain.handle('commit-task-to-map', async (event, projectId, projectName) => {
     const task = tasks[tasks.length - 1];
     const taskId = task.id;
 
+    console.log(`📋 Found task ${taskId} for project ${projectId}`);
+
+    // Single check to verify task completion using the new task-progress endpoint
     event.sender.send('commit-progress', {
-      stage: 'monitoring',
-      progress: 10,
-      message: `Monitoring task ${taskId} processing...`
+      stage: 'checking',
+      progress: 30,
+      message: `Checking if task ${taskId} is completed...`
     });
 
-    // Poll task status until completion
-    let taskComplete = false;
-    let pollCount = 0;
-    const maxPolls = 240; // 20 minutes max (5 second intervals)
-
-    while (!taskComplete && pollCount < maxPolls) {
-      try {
-        const taskStatusResponse = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-task-status/${taskId}`, {
-          timeout: 30000
-        });
-        
-        const taskData = taskStatusResponse.data;
-        const status = taskData.status;
-        const progress = taskData.progress || 0;
-        const processingNode = taskData.processing_node || 'Unknown';
-
-        // Map WebODM status to progress stages
-        let stage = 'processing';
-        let progressPercent = Math.min(10 + (progress * 0.7), 80); // 10% to 80% based on task progress
-        let message = `WebODM processing: ${status}`;
-
-        // Detailed status messages based on WebODM progress
-        if (progress === 0) {
-          message = `Task queued on ${processingNode}...`;
-        } else if (progress < 10) {
-          message = `Starting image processing... (${progress}%)`;
-        } else if (progress < 30) {
-          message = `Detecting features in images... (${progress}%)`;
-        } else if (progress < 50) {
-          message = `Matching features between images... (${progress}%)`;
-        } else if (progress < 70) {
-          message = `Building sparse point cloud... (${progress}%)`;
-        } else if (progress < 85) {
-          message = `Generating dense point cloud... (${progress}%)`;
-        } else if (progress < 95) {
-          message = `Creating mesh and textures... (${progress}%)`;
-        } else if (progress < 100) {
-          message = `Generating orthophoto and outputs... (${progress}%)`;
+    try {
+      // Use the new task-progress endpoint with query parameters for a single check
+      const progressResponse = await axios.get(`${IMAGE_HANDLER_API_URL}/api/task-progress`, {
+        params: {
+          task_id: taskId,
+          project_id: projectId
+        },
+        timeout: 30000
+      });
+      
+      const progressData = progressResponse.data;
+      
+      console.log(`📊 Task ${taskId} status check:`, {
+        status: progressData.status,
+        progress: progressData.progress,
+        is_complete: progressData.is_complete,
+        has_error: progressData.has_error,
+        stage: progressData.stage
+      });
+      
+      // Check if task is complete
+      if (!progressData.is_complete) {
+        if (progressData.has_error) {
+          throw new Error(`Task failed: ${progressData.last_error || 'Unknown error'}`);
+        } else {
+          throw new Error(`Task is not yet completed. Current status: ${progressData.stage} (${progressData.progress}%). Please wait for processing to finish before committing.`);
         }
+      }
 
-        // Send progress update
-        event.sender.send('commit-progress', {
-          stage: stage,
-          progress: progressPercent,
-          taskStatus: status,
-          taskProgress: progress,
-          message: message
-        });
-
-        if (status === 'COMPLETED') {
-          taskComplete = true;
-          
-          // Start the commit process
-          event.sender.send('commit-progress', {
-            stage: 'committing',
-            progress: 85,
-            message: 'Task completed! Starting commit to map...'
-          });
-          
-        } else if (status === 'FAILED' || status === 'CANCELED') {
-          throw new Error(`Task ${status}: ${taskData.last_error || 'Unknown error'}`);
-        }
-        
-        pollCount++;
-        
-        // Wait 5 seconds before next poll
-        if (!taskComplete) {
-          await new Promise(resolve => setTimeout(resolve, 5000));
-        }
-        
-      } catch (pollError) {
-        console.error('Error polling task status:', pollError.message);
-        // Continue polling unless it's a critical error
-        pollCount++;
-        if (pollCount > 5) {
-          event.sender.send('commit-progress', {
-            stage: 'warning',
-            progress: Math.min(10 + (pollCount * 2), 80),
-            message: `Connection issues, retrying... (${pollCount}/${maxPolls})`
-          });
-        }
-        await new Promise(resolve => setTimeout(resolve, 5000));
+      console.log(`✅ Task ${taskId} is completed and ready for commit`);
+      
+    } catch (checkError) {
+      if (checkError.response?.status === 404) {
+        throw new Error(`Task ${taskId} not found. It may have been deleted or the project ID is incorrect.`);
+      } else if (checkError.response?.status === 400) {
+        throw new Error('Invalid task or project ID provided.');
+      } else {
+        throw checkError; // Re-throw the original error
       }
     }
 
-    if (!taskComplete) {
-      throw new Error('Task processing timeout - task may still be running');
-    }
+    // Task is confirmed complete, proceed with commit
+    event.sender.send('commit-progress', {
+      stage: 'committing',
+      progress: 60,
+      message: 'Task is completed! Starting commit to map...'
+    });
 
     // Now commit the completed task
     event.sender.send('commit-progress', {
       stage: 'downloading',
-      progress: 90,
+      progress: 80,
       message: 'Downloading orthophoto and generating shapefile...'
     });
 
+    // Use map_name instead of project_name
     const response = await axios.post(`${IMAGE_HANDLER_API_URL}/api/commit-task-to-map`, {
       project_id: projectId,
-      project_name: projectName,
+      map_name: projectName,
       task_id: taskId
     }, {
       timeout: 300000, // 5 minutes for file operations
