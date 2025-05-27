@@ -281,6 +281,55 @@ function showRenamePrompt(defaultValue) {
   });
 }
 
+function showCreateProjectPrompt() {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('modal-overlay');
+    const input = document.getElementById('modal-input');
+    const ok = document.getElementById('modal-ok');
+    const cancel = document.getElementById('modal-cancel');
+    const title = document.getElementById('modal-title');
+    
+    if (!overlay || !input || !ok || !cancel || !title) {
+      console.error('Modal elements not found!');
+      resolve(null);
+      return;
+    }
+    
+    // Set up for create mode
+    title.textContent = 'Create Project';
+    input.value = '';
+    input.placeholder = 'Enter new project name';
+    overlay.style.display = 'block';
+    input.focus();
+
+    function cleanup() {
+      overlay.style.display = 'none';
+      ok.onclick = null;
+      cancel.onclick = null;
+      input.onkeydown = null;
+    }
+
+    ok.onclick = () => {
+      const val = input.value.trim();
+      if (val.length < 3) {
+        input.style.borderColor = '#dc3545';
+        input.focus();
+        return;
+      }
+      cleanup();
+      resolve(val);
+    };
+    cancel.onclick = () => {
+      cleanup();
+      resolve(null);
+    };
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') ok.onclick();
+      if (e.key === 'Escape') cancel.onclick();
+    };
+  });
+}
+
 // Handle folder selection
 if (selectFolderBtn) {
   selectFolderBtn.addEventListener('click', async () => {
@@ -512,4 +561,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize projects
   setTimeout(showProjects, 100);
+
+  const createProjectBtn = document.getElementById('createProjectBtn');
+  if (createProjectBtn) {
+    createProjectBtn.addEventListener('click', async () => {
+      const projectName = await showCreateProjectPrompt();
+      if (projectName) {
+        const result = await window.electronAPI.createProject(projectName);
+        if (result.success) {
+          await showProjects();
+          await populateProjectSelector();
+        } else {
+          alert('Failed to create project: ' + (result.error || 'Unknown error'));
+        }
+      }
+    });
+  }
 });
