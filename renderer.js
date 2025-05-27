@@ -77,10 +77,88 @@ async function showProjects() {
     projectsDiv.innerHTML = '<h2>Projects</h2>' + projects.map(p =>
       `<div class="project-card" data-id="${p.id}">
         <strong>${p.name}</strong> (ID: ${p.id})
-        <button class="rename-project" data-id="${p.id}" style="float:right;margin-left:10px;">Rename</button>
-        <button class="delete-project" data-id="${p.id}" style="float:right;margin-left:10px;">Delete</button>
+        <div class="project-buttons" style="float:right;">
+          <button class="commit-task" data-id="${p.id}" data-name="${p.name}" title="Commit task to map">📋 Commit</button>
+          <button class="rename-project" data-id="${p.id}" title="Rename project">✏️ Rename</button>
+          <button class="delete-project" data-id="${p.id}" title="Delete project">🗑️ Delete</button>
+        </div>
+        <div style="clear:both;"></div>
       </div>`
     ).join('');
+
+    // Attach commit task handlers
+    document.querySelectorAll('.commit-task').forEach(btn => {
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        const projectId = btn.dataset.id;
+        const projectName = btn.dataset.name;
+        
+        if (confirm(`Are you sure you want to commit the task for project "${projectName}" to the map? This will download the orthophoto and generate shape files.`)) {
+          btn.disabled = true;
+          btn.textContent = '⏳ Starting...';
+          
+          // Show progress container
+          const progressContainer = document.getElementById('progressContainer');
+          if (progressContainer) progressContainer.style.display = 'block';
+          
+          try {
+            const result = await window.electronAPI.commitTaskToMap(projectId, projectName);
+            
+            if (result.success) {
+              // Show final success message
+              const progressText = document.getElementById('progressText');
+              const progressMessage = document.getElementById('progressMessage');
+              const progressFill = document.getElementById('progressFill');
+              
+              if (progressFill) {
+                progressFill.style.width = '100%';
+                progressFill.style.background = 'linear-gradient(90deg, #28a745, #20c997)';
+              }
+              if (progressText) progressText.textContent = 'Task committed successfully! (100%)';
+              if (progressMessage) progressMessage.textContent = `Orthophoto and shapefile generated for ${projectName}`;
+              
+              setTimeout(() => {
+                alert(`✅ Task committed successfully!\n\nOrthophoto: ${result.data.orthophotoPath}\nShapefile: ${result.data.shapefilePath}`);
+                if (progressContainer) progressContainer.style.display = 'none';
+              }, 2000);
+            } else {
+              // Show error state
+              const progressFill = document.getElementById('progressFill');
+              const progressText = document.getElementById('progressText');
+              const progressMessage = document.getElementById('progressMessage');
+              
+              if (progressFill) progressFill.style.background = '#dc3545';
+              if (progressText) progressText.textContent = 'Task commit failed';
+              if (progressMessage) progressMessage.textContent = result.error;
+              
+              setTimeout(() => {
+                alert(`❌ Failed to commit task: ${result.error}`);
+                if (progressContainer) progressContainer.style.display = 'none';
+              }, 2000);
+            }
+          } catch (error) {
+            console.error('Error committing task:', error);
+            
+            // Show error state
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            const progressMessage = document.getElementById('progressMessage');
+            
+            if (progressFill) progressFill.style.background = '#dc3545';
+            if (progressText) progressText.textContent = 'Task commit error';
+            if (progressMessage) progressMessage.textContent = error.message;
+            
+            setTimeout(() => {
+              alert(`❌ Error committing task: ${error.message}`);
+              if (progressContainer) progressContainer.style.display = 'none';
+            }, 2000);
+          } finally {
+            btn.disabled = false;
+            btn.textContent = '📋 Commit';
+          }
+        }
+      };
+    });
 
     // Attach delete handlers
     document.querySelectorAll('.delete-project').forEach(btn => {
@@ -90,6 +168,7 @@ async function showProjects() {
           const result = await window.electronAPI.deleteProject(btn.dataset.id);
           if (result.success) {
             showProjects();
+            await populateProjectSelector(); // Refresh selector too
           } else {
             alert('Failed to delete project: ' + (result.error || 'Unknown error'));
           }
@@ -112,6 +191,7 @@ async function showProjects() {
           });
           if (result.success) {
             showProjects();
+            await populateProjectSelector(); // Refresh selector too
           } else {
             alert('Failed to rename project: ' + (result.error || 'Unknown error'));
             console.error('Rename error details:', result);
@@ -123,8 +203,8 @@ async function showProjects() {
     // Attach card click handlers
     document.querySelectorAll('.project-card').forEach(card => {
       card.onclick = (e) => {
-        // Prevent click if delete or rename button was clicked
-        if (e.target.classList.contains('delete-project') || e.target.classList.contains('rename-project')) return;
+        // Prevent click if any button was clicked
+        if (e.target.tagName === 'BUTTON') return;
         const projectName = currentProjects.find(p => p.id == card.dataset.id)?.name || 'Unknown';
         showTasks(card.dataset.id, projectName);
       };
@@ -293,6 +373,110 @@ window.electronAPI.onUploadProgress((data) => {
     setTimeout(() => {
       if (progressContainer) progressContainer.style.display = 'none';
     }, 3000);
+  }
+});
+
+// Enhanced commit progress handler with WebODM stages
+window.electronAPI.onCommitProgress((event, data) => {
+  const progressContainer = document.getElementById('progressContainer');
+  const progressFill = document.getElementById('progressFill');
+  const progressText = document.getElementById('progressText');
+  const progressMessage = document.getElementById('progressMessage');
+  
+  if (progressContainer) progressContainer.style.display = 'block';
+  
+  // Update progress bar
+  if (progressFill && data.progress !== undefined) {
+    progressFill.style.width = `${data.progress}%`;
+  }
+  
+  // Update text with detailed WebODM information
+  if (progressText) {
+    if (data.taskProgress !== undefined) {
+      progressText.textContent = `WebODM Processing: ${data.taskProgress}% complete (Overall: ${data.progress || 0}%)`;
+    } else {
+      progressText.textContent = `Task Progress: ${data.progress || 0}%`;
+    }
+  }
+  
+  if (progressMessage) {
+    progressMessage.textContent = data.message || '';
+  }
+  
+  // Change progress bar color based on stage
+  if (progressFill) {
+    switch (data.stage) {
+      case 'error':
+        progressFill.style.background = '#dc3545';
+        break;
+      case 'completed':
+        progressFill.style.background = 'linear-gradient(90deg, #28a745, #20c997)';
+        break;
+      case 'downloading':
+      case 'committing':
+        progressFill.style.background = 'linear-gradient(90deg, #ffc107, #fd7e14)';
+        break;
+      case 'processing':
+      case 'monitoring':
+        progressFill.style.background = 'linear-gradient(90deg, #007bff, #17a2b8)';
+        break;
+      case 'warning':
+        progressFill.style.background = 'linear-gradient(90deg, #fd7e14, #dc3545)';
+        break;
+      default:
+        progressFill.style.background = 'linear-gradient(90deg, #6c757d, #495057)';
+    }
+  }
+});
+
+// Add WebODM progress handler
+window.electronAPI.onWebODMProgress((data) => {
+  const progressContainer = document.getElementById('progressContainer');
+  const progressFill = document.getElementById('progressFill');
+  const progressText = document.getElementById('progressText');
+  const progressMessage = document.getElementById('progressMessage');
+  
+  if (progressContainer) progressContainer.style.display = 'block';
+  
+  // Update progress bar
+  if (progressFill && data.progress !== undefined) {
+    progressFill.style.width = `${data.progress}%`;
+  }
+  
+  // Update text with WebODM-specific information
+  if (progressText) {
+    progressText.textContent = `WebODM Processing: ${data.progress || 0}%`;
+  }
+  
+  if (progressMessage) {
+    progressMessage.textContent = data.message || '';
+  }
+  
+  // Style progress bar based on WebODM stage
+  if (progressFill) {
+    switch (data.stage) {
+      case 'processing':
+        progressFill.style.background = 'linear-gradient(90deg, #007bff, #17a2b8)';
+        progressContainer.setAttribute('data-stage', 'processing');
+        break;
+      case 'completed':
+        progressFill.style.background = 'linear-gradient(90deg, #28a745, #20c997)';
+        progressContainer.setAttribute('data-stage', 'completed');
+        break;
+      case 'error':
+        progressFill.style.background = 'linear-gradient(90deg, #dc3545, #c82333)';
+        progressContainer.setAttribute('data-stage', 'error');
+        break;
+      default:
+        progressFill.style.background = 'linear-gradient(90deg, #6c757d, #495057)';
+    }
+  }
+  
+  // Auto-hide progress on completion or error after delay
+  if (data.stage === 'completed' || data.stage === 'error') {
+    setTimeout(() => {
+      if (progressContainer) progressContainer.style.display = 'none';
+    }, 5000);
   }
 });
 
