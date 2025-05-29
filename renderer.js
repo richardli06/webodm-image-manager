@@ -66,7 +66,7 @@ async function showProjects() {
 
   try {
     const projects = await window.electronAPI.getProjects();
-    currentProjects = projects; // Store for later use
+    currentProjects = projects;
     console.log('Projects received:', projects);
     
     if (!projects || !projects.length) {
@@ -86,14 +86,20 @@ async function showProjects() {
       </div>`
     ).join('');
 
-    // Attach commit task handlers
+    // Add commit task handlers with mapserver selection
     document.querySelectorAll('.commit-task').forEach(btn => {
       btn.onclick = async (e) => {
         e.stopPropagation();
         const projectId = btn.dataset.id;
         const projectName = btn.dataset.name;
         
-        if (confirm(`Are you sure you want to commit the task for project "${projectName}" to the map? This will download the orthophoto and generate shape files.`)) {
+        // Show mapserver selection modal
+        const selectedMapServer = await showMapServerSelectionModal();
+        if (!selectedMapServer) {
+          return; // User cancelled
+        }
+        
+        if (confirm(`Are you sure you want to commit the task for project "${projectName}" to the "${selectedMapServer.display}" mapserver?`)) {
           btn.disabled = true;
           btn.textContent = '⏳ Starting...';
           
@@ -102,7 +108,8 @@ async function showProjects() {
           if (progressContainer) progressContainer.style.display = 'block';
           
           try {
-            const result = await window.electronAPI.commitTaskToMap(projectId, projectName);
+            // Use the selected mapserver name
+            const result = await window.electronAPI.commitTaskToMap(projectId, selectedMapServer.name);
             
             if (result.success) {
               // Show final success message
@@ -115,10 +122,10 @@ async function showProjects() {
                 progressFill.style.background = 'linear-gradient(90deg, #28a745, #20c997)';
               }
               if (progressText) progressText.textContent = 'Task committed successfully! (100%)';
-              if (progressMessage) progressMessage.textContent = `Orthophoto and shapefile generated for ${projectName}`;
+              if (progressMessage) progressMessage.textContent = `Orthophoto and shapefile generated for ${selectedMapServer.display}`;
               
               setTimeout(() => {
-                alert(`✅ Task committed successfully!\n\nOrthophoto: ${result.data.orthophotoPath}\nShapefile: ${result.data.shapefilePath}`);
+                alert(`✅ Task committed successfully to ${selectedMapServer.display}!\n\nOrthophoto: ${result.data.orthophotoPath}\nShapefile: ${result.data.shapefilePath}`);
                 if (progressContainer) progressContainer.style.display = 'none';
               }, 2000);
             } else {
@@ -159,7 +166,7 @@ async function showProjects() {
         }
       };
     });
-
+    
     // Attach delete handlers
     document.querySelectorAll('.delete-project').forEach(btn => {
       btn.onclick = async (e) => {
@@ -578,3 +585,115 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+
+// Add this function to get mapservers from your JSON file
+function populateMapServerSelector() {
+  // Simple hardcoded list matching your map_mappings.json
+  const mapServers = [
+    { name: 'gefarm', display: 'GE Farm (Local Demo)' },
+    { name: 'test_map', display: 'Test Map (Local Demo)' }
+  ];
+  return mapServers;
+}
+
+// Add this function to show the mapserver selection modal
+function showMapServerSelectionModal() {
+  return new Promise((resolve) => {
+    const mapServers = populateMapServerSelector();
+    
+    // Create modal HTML
+    const modalHTML = `
+      <div id="mapserver-modal-overlay" style="
+        position: fixed;
+        top: 0; left: 0;
+        width: 100vw; height: 100vh;
+        background: rgba(0,0,0,0.4);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      ">
+        <div class="modal-content" style="
+          background: white;
+          padding: 20px;
+          border-radius: 8px;
+          min-width: 400px;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        ">
+          <h3>Select MapServer Destination</h3>
+          <p>Choose which mapserver to deploy the orthophoto and shapefile to:</p>
+          <select id="mapserver-select" style="
+            width: 100%;
+            padding: 8px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+          ">
+            <option value="">-- Select MapServer --</option>
+            ${mapServers.map(ms => `<option value="${ms.name}">${ms.display}</option>`).join('')}
+          </select>
+          <div class="modal-buttons" style="
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 15px;
+          ">
+            <button id="mapserver-cancel" style="
+              padding: 8px 16px;
+              background: #6c757d;
+              color: white;
+              border: none;
+              border-radius: 4px;
+              cursor: pointer;
+            ">Cancel</button>
+            <button id="mapserver-ok" style="
+              padding: 8px 16px;
+              background: #007bff;
+              color: white;
+              border: none;
+              border-radius: 4px;
+              cursor: pointer;
+            ">Commit</button>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    // Add modal to page
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+    
+    const overlay = document.getElementById('mapserver-modal-overlay');
+    const select = document.getElementById('mapserver-select');
+    const okBtn = document.getElementById('mapserver-ok');
+    const cancelBtn = document.getElementById('mapserver-cancel');
+    
+    function cleanup() {
+      if (overlay && overlay.parentNode) {
+        overlay.parentNode.removeChild(overlay);
+      }
+    }
+    
+    okBtn.onclick = () => {
+      const selectedValue = select.value;
+      if (!selectedValue) {
+        select.style.borderColor = '#dc3545';
+        return;
+      }
+      
+      const selectedMapServer = mapServers.find(ms => ms.name === selectedValue);
+      cleanup();
+      resolve(selectedMapServer);
+    };
+    
+    cancelBtn.onclick = () => {
+      cleanup();
+      resolve(null);
+    };
+    
+    // Reset border color when user selects something
+    select.onchange = () => {
+      select.style.borderColor = '#ddd';
+    };
+  });
+}
