@@ -33,5 +33,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Expose safe APIs here
-  sendMessage: (message) => ipcRenderer.invoke('send-message', message)
+  sendMessage: (message) => ipcRenderer.invoke('send-message', message),
+
+  // New APIs for commit task to custom folder
+  selectCommitFolder: () => ipcRenderer.invoke('select-commit-folder'),
+  commitTaskToCustomFolder: (projectId, folderPath) => ipcRenderer.invoke('commit-task-to-custom-folder', projectId, folderPath)
 });

@@ -93,13 +93,13 @@ async function showProjects() {
         const projectId = btn.dataset.id;
         const projectName = btn.dataset.name;
         
-        // Show mapserver selection modal
-        const selectedMapServer = await showMapServerSelectionModal();
-        if (!selectedMapServer) {
+        // Show folder selection modal
+        const selectedFolder = await showFolderSelectionModal();
+        if (!selectedFolder) {
           return; // User cancelled
         }
         
-        if (confirm(`Are you sure you want to commit the task for project "${projectName}" to the "${selectedMapServer.display}" mapserver?`)) {
+        if (confirm(`Are you sure you want to commit the task for project "${projectName}" to:\n"${selectedFolder.path}"?`)) {
           btn.disabled = true;
           btn.textContent = '⏳ Starting...';
           
@@ -108,8 +108,8 @@ async function showProjects() {
           if (progressContainer) progressContainer.style.display = 'block';
           
           try {
-            // Use the selected mapserver name
-            const result = await window.electronAPI.commitTaskToMap(projectId, selectedMapServer.name);
+            // Use the selected folder path directly
+            const result = await window.electronAPI.commitTaskToCustomFolder(projectId, selectedFolder.path);
             
             if (result.success) {
               // Show final success message
@@ -122,10 +122,10 @@ async function showProjects() {
                 progressFill.style.background = 'linear-gradient(90deg, #28a745, #20c997)';
               }
               if (progressText) progressText.textContent = 'Task committed successfully! (100%)';
-              if (progressMessage) progressMessage.textContent = `Orthophoto and shapefile generated for ${selectedMapServer.display}`;
+              if (progressMessage) progressMessage.textContent = `Orthophoto and shapefile generated in ${selectedFolder.name}`;
               
               setTimeout(() => {
-                alert(`✅ Task committed successfully to ${selectedMapServer.display}!\n\nOrthophoto: ${result.data.orthophotoPath}\nShapefile: ${result.data.shapefilePath}`);
+                alert(`✅ Task committed successfully to ${selectedFolder.name}!\n\nOrthophoto: ${result.data.orthophotoPath}\nShapefile: ${result.data.shapefilePath}`);
                 if (progressContainer) progressContainer.style.display = 'none';
               }, 2000);
             } else {
@@ -145,20 +145,7 @@ async function showProjects() {
             }
           } catch (error) {
             console.error('Error committing task:', error);
-            
-            // Show error state
-            const progressFill = document.getElementById('progressFill');
-            const progressText = document.getElementById('progressText');
-            const progressMessage = document.getElementById('progressMessage');
-            
-            if (progressFill) progressFill.style.background = '#dc3545';
-            if (progressText) progressText.textContent = 'Task commit error';
-            if (progressMessage) progressMessage.textContent = error.message;
-            
-            setTimeout(() => {
-              alert(`❌ Error committing task: ${error.message}`);
-              if (progressContainer) progressContainer.style.display = 'none';
-            }, 2000);
+            alert(`❌ Error committing task: ${error.message}`);
           } finally {
             btn.disabled = false;
             btn.textContent = '📋 Commit';
@@ -596,14 +583,12 @@ function populateMapServerSelector() {
   return mapServers;
 }
 
-// Add this function to show the mapserver selection modal
-function showMapServerSelectionModal() {
+// Replace the showMapServerSelectionModal function with this:
+function showFolderSelectionModal() {
   return new Promise((resolve) => {
-    const mapServers = populateMapServerSelector();
-    
-    // Create modal HTML
+    // Create modal HTML for folder selection
     const modalHTML = `
-      <div id="mapserver-modal-overlay" style="
+      <div id="folder-modal-overlay" style="
         position: fixed;
         top: 0; left: 0;
         width: 100vw; height: 100vh;
@@ -617,29 +602,57 @@ function showMapServerSelectionModal() {
           background: white;
           padding: 20px;
           border-radius: 8px;
-          min-width: 400px;
+          min-width: 500px;
           box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
         ">
-          <h3>Select MapServer Destination</h3>
-          <p>Choose which mapserver to deploy the orthophoto and shapefile to:</p>
-          <select id="mapserver-select" style="
-            width: 100%;
-            padding: 8px;
-            margin: 10px 0;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 14px;
-          ">
-            <option value="">-- Select MapServer --</option>
-            ${mapServers.map(ms => `<option value="${ms.name}">${ms.display}</option>`).join('')}
-          </select>
+          <h3>Select Destination Folder</h3>
+          <p>Choose where to save the orthophoto and shapefile:</p>
+          
+          <div style="margin: 15px 0;">
+            <label style="display: block; margin-bottom: 5px; font-weight: bold;">Quick Options:</label>
+            <select id="quick-folder-select" style="
+              width: 100%;
+              padding: 8px;
+              margin-bottom: 10px;
+              border: 1px solid #ddd;
+              border-radius: 4px;
+              font-size: 14px;
+            ">
+              <option value="">-- Select a preset folder --</option>
+              <option value="gefarm">GE Farm (Local Demo)</option>
+              <option value="test_map">Test Map (Local Demo)</option>
+            </select>
+          </div>
+          
+          <div style="margin: 15px 0;">
+            <label style="display: block; margin-bottom: 5px; font-weight: bold;">Or choose custom folder:</label>
+            <div style="display: flex; gap: 10px;">
+              <input id="custom-folder-path" type="text" placeholder="Select a custom folder..." style="
+                flex: 1;
+                padding: 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 14px;
+                background: #f8f9fa;
+              " readonly>
+              <button id="browse-folder-btn" style="
+                padding: 8px 16px;
+                background: #28a745;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+              ">Browse...</button>
+            </div>
+          </div>
+          
           <div class="modal-buttons" style="
             display: flex;
             gap: 10px;
             justify-content: flex-end;
-            margin-top: 15px;
+            margin-top: 20px;
           ">
-            <button id="mapserver-cancel" style="
+            <button id="folder-cancel" style="
               padding: 8px 16px;
               background: #6c757d;
               color: white;
@@ -647,7 +660,7 @@ function showMapServerSelectionModal() {
               border-radius: 4px;
               cursor: pointer;
             ">Cancel</button>
-            <button id="mapserver-ok" style="
+            <button id="folder-ok" style="
               padding: 8px 16px;
               background: #007bff;
               color: white;
@@ -663,10 +676,14 @@ function showMapServerSelectionModal() {
     // Add modal to page
     document.body.insertAdjacentHTML('beforeend', modalHTML);
     
-    const overlay = document.getElementById('mapserver-modal-overlay');
-    const select = document.getElementById('mapserver-select');
-    const okBtn = document.getElementById('mapserver-ok');
-    const cancelBtn = document.getElementById('mapserver-cancel');
+    const overlay = document.getElementById('folder-modal-overlay');
+    const quickSelect = document.getElementById('quick-folder-select');
+    const customPath = document.getElementById('custom-folder-path');
+    const browseBtn = document.getElementById('browse-folder-btn');
+    const okBtn = document.getElementById('folder-ok');
+    const cancelBtn = document.getElementById('folder-cancel');
+    
+    let selectedFolder = null;
     
     function cleanup() {
       if (overlay && overlay.parentNode) {
@@ -674,16 +691,57 @@ function showMapServerSelectionModal() {
       }
     }
     
+    // Handle quick folder selection
+    quickSelect.onchange = () => {
+      const selectedValue = quickSelect.value;
+      if (selectedValue) {
+        // Map to actual paths
+        const folderMappings = {
+          'gefarm': 'C:/Users/WH01/Desktop/AUAV_mapserver_1/ms4w/apps/local-demo/data',
+          'test_map': 'C:/Users/WH01/Desktop/AUAV_mapserver_1/ms4w/apps/local-demo/test_map'
+        };
+        
+        selectedFolder = {
+          path: folderMappings[selectedValue],
+          name: quickSelect.options[quickSelect.selectedIndex].text,
+          isPreset: true
+        };
+        
+        customPath.value = selectedFolder.path;
+        customPath.style.borderColor = '#28a745';
+      }
+    };
+    
+    // Handle custom folder browsing
+    browseBtn.onclick = async () => {
+      try {
+        const result = await window.electronAPI.selectCommitFolder();
+        if (result.success && result.folderPath) {
+          selectedFolder = {
+            path: result.folderPath,
+            name: `Custom: ${result.folderPath.split('/').pop() || result.folderPath.split('\\').pop()}`,
+            isPreset: false
+          };
+          
+          customPath.value = result.folderPath;
+          customPath.style.borderColor = '#28a745';
+          quickSelect.value = ''; // Clear quick select
+        }
+      } catch (error) {
+        console.error('Error selecting folder:', error);
+        alert('Error selecting folder: ' + error.message);
+      }
+    };
+    
     okBtn.onclick = () => {
-      const selectedValue = select.value;
-      if (!selectedValue) {
-        select.style.borderColor = '#dc3545';
+      if (!selectedFolder || !customPath.value) {
+        customPath.style.borderColor = '#dc3545';
+        quickSelect.style.borderColor = '#dc3545';
         return;
       }
       
-      const selectedMapServer = mapServers.find(ms => ms.name === selectedValue);
       cleanup();
-      resolve(selectedMapServer);
+      resolve(selectedFolder);
     };
     
     cancelBtn.onclick = () => {
@@ -691,9 +749,10 @@ function showMapServerSelectionModal() {
       resolve(null);
     };
     
-    // Reset border color when user selects something
-    select.onchange = () => {
-      select.style.borderColor = '#ddd';
+    // Reset border colors when user interacts
+    customPath.onfocus = () => {
+      customPath.style.borderColor = '#ddd';
+      quickSelect.style.borderColor = '#ddd';
     };
   });
 }

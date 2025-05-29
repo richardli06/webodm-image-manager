@@ -588,7 +588,6 @@ ipcMain.handle('commit-task-to-map', async (event, projectId, projectName) => {
       message: 'Task is completed! Starting commit to map...'
     });
 
-    // Now commit the completed task
     event.sender.send('commit-progress', {
       stage: 'downloading',
       progress: 80,
@@ -639,6 +638,208 @@ ipcMain.handle('commit-task-to-map', async (event, projectId, projectName) => {
     };
   }
 });
+
+// Replace the commit-task-to-custom-folder handler with this:
+ipcMain.handle('commit-task-to-custom-folder', async (event, projectId, folderPath) => {
+  try {
+    console.log(`🗺️ Committing task to custom folder: ${folderPath} for project ID: ${projectId}`);
+    
+    // Send initial progress
+    event.sender.send('commit-progress', {
+      stage: 'starting',
+      progress: 0,
+      message: `Starting commit process to custom folder...`
+    });
+
+    // Get the task ID for this project first
+    event.sender.send('commit-progress', {
+      stage: 'fetching',
+      progress: 10,
+      message: 'Getting task information from WebODM...'
+    });
+
+    // Get tasks for the project to find the task ID
+    let tasks;
+    try {
+      const tasksResponse = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-tasks/${projectId}`, {
+        timeout: 30000
+      });
+      tasks = tasksResponse.data;
+    } catch (directError) {
+      // If direct endpoint doesn't exist, try with query params
+      console.log('Direct endpoint failed, trying with query params...');
+      const tasksResponse = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-tasks`, {
+        params: { project_id: projectId },
+        timeout: 30000
+      });
+      tasks = tasksResponse.data;
+    }
+
+    if (!tasks || tasks.length === 0) {
+      throw new Error('No tasks found for this project');
+    }
+
+    // Get the most recent task
+    const task = tasks[tasks.length - 1];
+    const taskId = task.id;
+
+    console.log(`📋 Found task ${taskId} for project ${projectId}`);
+
+    // Check if task is completed
+    event.sender.send('commit-progress', {
+      stage: 'checking',
+      progress: 30,
+      message: `Checking if task ${taskId} is completed...`
+    });
+
+    try {
+      const progressResponse = await axios.get(`${IMAGE_HANDLER_API_URL}/api/task-progress`, {
+        params: {
+          task_id: taskId,
+          project_id: projectId
+        },
+        timeout: 30000
+      });
+      
+      const progressData = progressResponse.data;
+      
+      if (!progressData.is_complete) {
+        if (progressData.has_error) {
+          throw new Error(`Task failed: ${progressData.last_error || 'Unknown error'}`);
+        } else {
+          throw new Error(`Task is not yet completed. Current status: ${progressData.stage} (${progressData.progress}%). Please wait for processing to finish before committing.`);
+        }
+      }
+
+      console.log(`✅ Task ${taskId} is completed and ready for commit`);
+      
+    } catch (checkError) {
+      if (checkError.response?.status === 404) {
+        throw new Error(`Task ${taskId} not found. It may have been deleted or the project ID is incorrect.`);
+      } else if (checkError.response?.status === 400) {
+        throw new Error('Invalid task or project ID provided.');
+      } else {
+        throw checkError;
+      }
+    }
+
+    // Task is confirmed complete, proceed with commit to custom folder
+    event.sender.send('commit-progress', {
+      stage: 'committing',
+      progress: 60,
+      message: 'Task is completed! Starting commit to custom folder...'
+    });
+
+    event.sender.send('commit-progress', {
+      stage: 'downloading',
+      progress: 80,
+      message: 'Downloading orthophoto and generating shapefile...'
+    });
+
+    // Call the API with custom folder path
+    const response = await axios.post(`${IMAGE_HANDLER_API_URL}/api/commit-task-to-custom-folder`, {
+      project_id: projectId,
+      task_id: taskId,
+      folder_path: folderPath
+    }, {
+      timeout: 300000, // 5 minutes for file operations
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    });
+
+    // Final completion
+    event.sender.send('commit-progress', {
+      stage: 'completed',
+      progress: 100,
+      message: 'Task committed successfully to custom folder!'
+    });
+
+    console.log('✅ Task committed to custom folder successfully:', response.data);
+    
+    return {
+      success: true,
+      data: response.data
+    };
+
+  } catch (error) {
+    console.error('❌ Failed to commit task to custom folder:', error.message);
+    console.error('📄 Response data:', error.response?.data);
+    
+    // Send error progress
+    event.sender.send('commit-progress', {
+      stage: 'error',
+      progress: 0,
+      message: `Error: ${error.message}`
+    });
+    
+    return {
+      success: false,
+      error: error.response?.data?.error || error.message,
+      details: error.response?.data
+    };
+  }
+});
+
+/**
+ * Opens a folder selection dialog for commit destination
+ * @returns {Promise<Object>} Result object with success/folderPath or error
+ */
+ipcMain.handle('select-commit-folder', async () => {
+  try {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      title: 'Select folder to save orthophoto and shapefile',
+      buttonLabel: 'Select Folder'
+    });
+    
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return { 
+        success: false, 
+        error: 'No folder selected' 
+      };
+    }
+    
+    const selectedPath = result.filePaths[0];
+    console.log('📁 User selected commit folder:', selectedPath);
+    
+    // Verify the folder exists and is writable
+    try {
+      const stats = fs.statSync(selectedPath);
+      if (!stats.isDirectory()) {
+        return {
+          success: false,
+          error: 'Selected path is not a directory'
+        };
+      }
+      
+      // Test write permissions by creating a temporary file
+      const testFile = path.join(selectedPath, '.write_test_' + Date.now());
+      fs.writeFileSync(testFile, 'test');
+      fs.unlinkSync(testFile);
+      
+      return {
+        success: true,
+        folderPath: selectedPath
+      };
+      
+    } catch (permissionError) {
+      console.error('❌ Folder permission error:', permissionError.message);
+      return {
+        success: false,
+        error: `Cannot write to selected folder: ${permissionError.message}`
+      };
+    }
+    
+  } catch (error) {
+    console.error('❌ Error in select-commit-folder handler:', error.message);
+    return {
+      success: false,
+      error: `Dialog error: ${error.message}`
+    };
+  }
+});
+
 
 /**
  * Polls WebODM task progress and sends updates to renderer
