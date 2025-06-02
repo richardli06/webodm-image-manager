@@ -399,20 +399,36 @@ ipcMain.handle('get-projects', async () => {
   }
 });
 
-/**
- * Fetches all tasks for a given project from the image request handler.
- * @param {Electron.IpcMainInvokeEvent} event - The IPC event.
- * @param {string} projectId - The project ID.
- * @returns {Promise<Array>} Array of task objects or empty array on error.
- */
+// Replace the existing get-tasks handler with this:
 ipcMain.handle('get-tasks', async (event, projectId) => {
   try {
-    const res = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-tasks`, {
-      params: { project_id: projectId }
-    });
-    return res.data.results || res.data; // .results if paginated, else array
+    console.log(`📋 Fetching tasks for project ${projectId}...`);
+    
+    // Try the URL parameter endpoint first (consistent with commit logic)
+    let res;
+    try {
+      res = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-tasks/${projectId}`, {
+        timeout: 30000
+      });
+    } catch (urlError) {
+      console.log('URL parameter endpoint failed, trying query parameter...');
+      // Fallback to query parameter
+      res = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-tasks`, {
+        params: { project_id: projectId },
+        timeout: 30000
+      });
+    }
+    
+    const tasks = res.data.results || res.data;
+    console.log(`📋 Found ${tasks.length} tasks for project ${projectId}`);
+    return tasks;
+    
   } catch (e) {
-    console.error('Failed to fetch tasks:', e.message, e.response && e.response.data);
+    console.error('Failed to fetch tasks:', e.message, e.response?.data);
+    console.error('📄 Response status:', e.response?.status);
+    console.error('📄 Response data:', e.response?.data);
+    
+    // Return empty array instead of throwing to prevent frontend crashes
     return [];
   }
 });
@@ -659,24 +675,29 @@ ipcMain.handle('commit-task-to-custom-folder', async (event, projectId, folderPa
     });
 
     // Get tasks for the project to find the task ID
+    // Try the direct endpoint first, then fall back to get-tasks with params
     let tasks;
     try {
+      console.log(`📋 Fetching tasks for project ${projectId}...`);
       const tasksResponse = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-tasks/${projectId}`, {
         timeout: 30000
       });
       tasks = tasksResponse.data;
-    } catch (directError) {
-      // If direct endpoint doesn't exist, try with query params
-      console.log('Direct endpoint failed, trying with query params...');
-      const tasksResponse = await axios.get(`${IMAGE_HANDLER_API_URL}/api/get-tasks`, {
-        params: { project_id: projectId },
-        timeout: 30000
-      });
-      tasks = tasksResponse.data;
+      console.log(`📋 Got ${tasks.length} tasks from server`);
+    } catch (taskError) {
+      console.error('❌ Failed to fetch tasks:', taskError.message);
+      console.error('📄 Response status:', taskError.response?.status);
+      console.error('📄 Response data:', taskError.response?.data);
+      
+      if (taskError.response?.status === 404) {
+        throw new Error(`Project ${projectId} not found in WebODM. Please check if the project still exists.`);
+      } else {
+        throw new Error(`Failed to fetch tasks: ${taskError.response?.data?.error || taskError.message}`);
+      }
     }
 
     if (!tasks || tasks.length === 0) {
-      throw new Error('No tasks found for this project');
+      throw new Error(`No tasks found for project ${projectId}. Please create a task first by uploading images.`);
     }
 
     // Get the most recent task

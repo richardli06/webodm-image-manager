@@ -78,7 +78,7 @@ async function showProjects() {
       `<div class="project-card" data-id="${p.id}">
         <strong>${p.name}</strong> (ID: ${p.id})
         <div class="project-buttons" style="float:right;">
-          <button class="commit-task" data-id="${p.id}" data-name="${p.name}" title="Commit task to map">📋 Commit</button>
+          <button class="commit-task" data-id="${p.id}" data-name="${p.name}" title="Commit task to map">📤 Commit</button>
           <button class="rename-project" data-id="${p.id}" title="Rename project">✏️ Rename</button>
           <button class="delete-project" data-id="${p.id}" title="Delete project">🗑️ Delete</button>
         </div>
@@ -148,7 +148,7 @@ async function showProjects() {
             alert(`❌ Error committing task: ${error.message}`);
           } finally {
             btn.disabled = false;
-            btn.textContent = '📋 Commit';
+            btn.textContent = '📤 Commit';
           }
         }
       };
@@ -235,6 +235,115 @@ async function showTasks(projectId, projectName) {
   } catch (error) {
     console.error('Error in showTasks:', error);
   }
+}
+
+// Add this function to show tasks for a project
+async function showTasksForProject(projectId, projectName) {
+  console.log(`📋 Loading tasks for project ${projectId}: ${projectName}`);
+  
+  try {
+    const tasks = await window.electronAPI.getTasks(projectId);
+    
+    if (!tasks || tasks.length === 0) {
+      alert(`No tasks found for project "${projectName}"`);
+      return;
+    }
+    
+    // Create tasks modal
+    const modalHTML = `
+      <div id="tasks-modal-overlay" style="
+        position: fixed;
+        top: 0; left: 0;
+        width: 100vw; height: 100vh;
+        background: rgba(0,0,0,0.4);
+        z-index: 1000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      ">
+        <div class="modal-content" style="
+          background: white;
+          padding: 20px;
+          border-radius: 8px;
+          max-width: 800px;
+          max-height: 80vh;
+          overflow-y: auto;
+          box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        ">
+          <h3>Tasks for "${projectName}"</h3>
+          <div id="tasks-list">
+            ${tasks.map(task => `
+              <div class="task-card" style="
+                border: 1px solid #ddd;
+                margin: 10px 0;
+                padding: 15px;
+                border-radius: 4px;
+                background: ${getTaskStatusColor(task.status)};
+              ">
+                <div>
+                  <strong>${task.name || `Task ${task.id}`}</strong>
+                  <br>
+                  <small>ID: ${task.id}</small>
+                  <br>
+                  <small>Status: ${getTaskStatusText(task.status)} (${task.status})</small>
+                  <br>
+                  <small>Images: ${task.images_count || 0}</small>
+                  <br>
+                  <small>Created: ${new Date(task.created_at).toLocaleString()}</small>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          <div style="margin-top: 20px; text-align: right;">
+            <button id="close-tasks-modal" style="
+              padding: 8px 16px;
+              background: #6c757d;
+              color: white;
+              border: none;
+              border-radius: 4px;
+              cursor: pointer;
+            ">Close</button>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    // Add modal to page
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+    
+    // Add event listeners
+    document.getElementById('close-tasks-modal').onclick = () => {
+      const overlay = document.getElementById('tasks-modal-overlay');
+      if (overlay) overlay.remove();
+    };
+    
+  } catch (error) {
+    console.error('Error loading tasks:', error);
+    alert(`Error loading tasks: ${error.message}`);
+  }
+}
+
+// Helper functions for task status
+function getTaskStatusText(status) {
+  const statusMap = {
+    10: 'QUEUED',
+    20: 'RUNNING',
+    30: 'FAILED',
+    40: 'COMPLETED',
+    50: 'CANCELED'
+  };
+  return statusMap[status] || 'UNKNOWN';
+}
+
+function getTaskStatusColor(status) {
+  const colorMap = {
+    10: '#fff3cd', // QUEUED - yellow
+    20: '#d1ecf1', // RUNNING - blue
+    30: '#f8d7da', // FAILED - red
+    40: '#d4edda', // COMPLETED - green
+    50: '#e2e3e5'  // CANCELED - gray
+  };
+  return colorMap[status] || '#f8f9fa';
 }
 
 function showRenamePrompt(defaultValue) {
