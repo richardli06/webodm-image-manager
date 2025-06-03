@@ -4,6 +4,42 @@ const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 module.exports = {
   packagerConfig: {
     asar: true,
+    ignore: [
+      // Exclude the image handler server (MAIN CULPRIT - likely has huge node_modules)
+      /^\/image_request_handler/,
+      
+      // Exclude development files
+      /^\/\.git/,
+      /^\/\.vscode/,
+      /^\/\.nyc_output/,
+      /^\/coverage/,
+      /^\/src/,
+      /^\/docs/,
+      /^\/test/,
+      /^\/tests/,
+      
+      // Exclude large data folders that might exist
+      /^\/data/,
+      /^\/logs/,
+      /^\/temp/,
+      /^\/uploads/,
+      /^\/output/,
+      /^\/maps/,
+      /^\/orthophotos/,
+      
+      // Exclude OS files
+      /^\/\.DS_Store/,
+      /^\/Thumbs\.db/,
+      
+      // Exclude npm cache
+      /^\/node_modules\/\.cache/,
+      
+      // Exclude any log files
+      /\.log$/,
+      
+      // Exclude any large image files that might be in root
+      /\.(tif|tiff|jpg|jpeg|png|bmp)$/i
+    ]
   },
   rebuildConfig: {},
   makers: [
